@@ -32,7 +32,7 @@ import vllm.envs as envs
 from vllm.config import ModelConfig
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine  # type: ignore
-from vllm.engine.multiprocessing.client import MQLLMEngineClient
+from vllm.engine.multiprocessing.client import FusedEngineClient, MQLLMEngineClient
 from vllm.engine.multiprocessing.engine import run_mp_engine
 from vllm.engine.protocol import EngineClient
 from vllm.entrypoints.chat_utils import load_chat_template
@@ -872,7 +872,9 @@ async def run_server(args, **uvicorn_kwargs) -> None:
 
     signal.signal(signal.SIGTERM, signal_handler)
 
-    async with build_async_engine_client(args) as engine_client:
+    async with build_async_engine_client(args) as prefill_client, \
+        build_async_engine_client(args) as decode_client:
+        engine_client = FusedEngineClient(prefill_client, decode_client)
         app = build_app(args)
 
         model_config = await engine_client.get_model_config()

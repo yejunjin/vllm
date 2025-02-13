@@ -4,6 +4,7 @@ import asyncio
 import copy
 import pickle
 from contextlib import contextmanager, suppress
+import random
 from typing import (Any, AsyncGenerator, Dict, Iterator, List, Mapping,
                     Optional, Union, cast, overload)
 
@@ -44,6 +45,7 @@ from vllm.model_executor.layers.sampler import SamplerOutput
 from vllm.outputs import PoolingRequestOutput, RequestOutput
 from vllm.prompt_adapter.request import PromptAdapterRequest
 from vllm.sampling_params import SamplingParams
+from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.transformers_utils.tokenizer_group import init_tokenizer_from_configs
 from vllm.utils import deprecate_kwargs
 
@@ -705,3 +707,114 @@ class MQLLMEngineClient(EngineClient):
         # Raise on error, otherwise happily return None
         if isinstance(request_output, BaseException):
             raise request_output
+
+
+class FusedEngineClient(EngineClient):
+    def __init__(self, prefill_client: EngineClient, decode_client: EngineClient):
+        self.prefill_client = prefill_client
+        self.decode_client = decode_client
+        self.request_tracker = {}
+
+    @property 
+    def is_running(self) -> bool:
+        return self.prefill_client.is_running and self.decode_client.is_running
+
+    @property
+    def is_stopped(self) -> bool:
+        return self.prefill_client.is_stopped or self.decode_client.is_stopped
+    
+    @property
+    def errored(self) -> bool:
+        return self.prefill_client.errored or self.decode_client.errored
+    
+    @property
+    def dead_error(self) -> BaseException:
+        if self.prefill_client.dead_error:
+            return self.prefill_client.dead_error
+        return self.decode_client.dead_error
+
+    def generate(
+        self,
+        prompt: PromptType,
+        sampling_params: SamplingParams,
+        request_id: str,
+        lora_request: Optional[LoRARequest] = None,
+        trace_headers: Optional[Mapping[str, str]] = None,
+        prompt_adapter_request: Optional[PromptAdapterRequest] = None,
+        priority: int = 0,
+    ) -> AsyncGenerator[RequestOutput, None]:
+        # TODO: it is for test only
+
+        # random to delegate to prefill or decode client
+        if random.random() < 0.5:
+            logger.info("choosing prefill")
+            client = self.prefill_client
+        else:
+            logger.info("choosing decode")
+            client = self.decode_client
+        self.request_tracker[request_id] = client
+        return client.generate(prompt, sampling_params, request_id, lora_request, trace_headers, prompt_adapter_request, priority)
+
+    def encode(
+        self,
+        prompt: PromptType,
+        pooling_params: PoolingParams,
+        request_id: str,
+        lora_request: Optional[LoRARequest] = None,
+        trace_headers: Optional[Mapping[str, str]] = None,
+        priority: int = 0,
+    ) -> AsyncGenerator[PoolingRequestOutput, None]:
+        raise NotImplementedError
+    
+    
+    async def abort(self, request_id: str) -> None:
+        client = self.request_tracker[request_id]
+        await client.abort(request_id)
+
+    async def get_model_config(self) -> ModelConfig:
+        return await self.prefill_client.get_model_config()
+
+    async def get_decoding_config(self) -> DecodingConfig:
+        return await self.prefill_client.get_decoding_config()
+    
+    async def get_input_preprocessor(self) -> InputPreprocessor:
+        return await self.prefill_client.get_input_preprocessor()
+    
+    async def get_tokenizer(
+        self,
+        lora_request: Optional[LoRARequest] = None,
+    ) -> AnyTokenizer:
+        return await self.prefill_client.get_tokenizer(lora_request)
+    
+    async def is_tracing_enabled(self) -> bool:
+        return await self.prefill_client.is_tracing_enabled() \
+            and await self.decode_client.is_tracing_enabled()
+    
+    async def do_log_stats(
+        self,
+        scheduler_outputs: Optional[SchedulerOutputs] = None,
+        model_output: Optional[List[SamplerOutput]] = None,
+    ) -> None:
+        await self.prefill_client.do_log_stats(scheduler_outputs, model_output)
+        await self.decode_client.do_log_stats(scheduler_outputs, model_output)
+
+    async def check_health(self) -> None:
+        await self.prefill_client.check_health()
+        await self.decode_client.check_health()
+    
+
+    async def start_profile(self) -> None:
+        await self.prefill_client.start_profile()
+        await self.decode_client.start_profile()
+
+    async def stop_profile(self) -> None:
+        await self.prefill_client.stop_profile()
+        await self.decode_client.stop_profile()
+        
+    async def reset_prefix_cache(self) -> None:
+        await self.prefill_client.reset_prefix_cache()
+        await self.decode_client.reset_prefix_cache()
+    
+    async def add_lora(self, lora_request: LoRARequest) -> None:
+        await self.prefill_client.add_lora(lora_request)
+        await self.decode_client.add_lora(lora_request)
