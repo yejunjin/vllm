@@ -1126,10 +1126,9 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                 logger.info("model put into queue")
             else:
                 logger.info("tring to get model from model_queue")
-                self.model = get_model(vllm_config=self.vllm_config)
                 state_dict = self.model_queue.get()
                 assert state_dict is not None
-                self.model.load_state_dict(state_dict)
+                self.model = get_model(vllm_config=self.vllm_config, state_dict=state_dict)
                 logger.info("model loaded from queue")
             
 

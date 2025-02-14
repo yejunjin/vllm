@@ -9,9 +9,9 @@ from vllm.model_executor.model_loader.utils import (
     get_architecture_class_name, get_model_architecture)
 
 
-def get_model(*, vllm_config: VllmConfig) -> nn.Module:
+def get_model(*, vllm_config: VllmConfig, state_dict = None) -> nn.Module:
     loader = get_model_loader(vllm_config.load_config)
-    return loader.load_model(vllm_config=vllm_config)
+    return loader.load_model(vllm_config=vllm_config, state_dict=state_dict)
 
 
 __all__ = [

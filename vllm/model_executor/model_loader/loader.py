@@ -165,7 +165,7 @@ class BaseModelLoader(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def load_model(self, *, vllm_config: VllmConfig) -> nn.Module:
+    def load_model(self, *, vllm_config: VllmConfig, state_dict = None) -> nn.Module:
         """Load a model with the given configurations."""
         raise NotImplementedError
 
@@ -373,7 +373,7 @@ class DefaultModelLoader(BaseModelLoader):
                               fall_back_to_pt=True,
                               allow_patterns_overrides=None)
 
-    def load_model(self, vllm_config: VllmConfig) -> nn.Module:
+    def load_model(self, vllm_config: VllmConfig, state_dict = None) -> nn.Module:
         device_config = vllm_config.device_config
         model_config = vllm_config.model_config
 
@@ -381,6 +381,11 @@ class DefaultModelLoader(BaseModelLoader):
         with set_default_torch_dtype(model_config.dtype):
             with target_device:
                 model = _initialize_model(vllm_config=vllm_config)
+                if state_dict:
+                    for name, param in model.named_parameters():
+                        if name in state_dict:
+                            param.data = state_dict[name].data  # Direct assignment
+                    return model.eval()
 
             weights_to_load = {name for name, _ in model.named_parameters()}
             loaded_weights = model.load_weights(
