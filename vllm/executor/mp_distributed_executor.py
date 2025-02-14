@@ -89,7 +89,9 @@ class MultiprocessingDistributedExecutor(DistributedExecutorBase):
             for rank in range(1, world_size):
                 worker = ProcessWorkerWrapper(result_handler,
                                               WorkerWrapperBase,
-                                              self.vllm_config, rank)
+                                              self.vllm_config, rank,
+                                              self.is_prefill,
+                                              self.model_queues[rank])
                 self.workers.append(worker)
                 if rank % tensor_parallel_size == 0:
                     self.tp_driver_workers.append(worker)
@@ -103,7 +105,7 @@ class MultiprocessingDistributedExecutor(DistributedExecutorBase):
         # Set up signal handlers to shutdown the executor cleanly
         # sometimes gc does not work well
 
-        self.driver_worker = WorkerWrapperBase(self.vllm_config, 0)
+        self.driver_worker = WorkerWrapperBase(self.vllm_config, 0, self.is_prefill, self.model_queues[0])
 
         all_kwargs = []
         distributed_init_method = get_distributed_init_method(

@@ -15,6 +15,7 @@ import numpy as np
 import torch
 import torch.distributed
 import torch.nn as nn
+from torch import multiprocessing as mp
 from tqdm import tqdm
 
 import vllm.envs as envs
@@ -1010,6 +1011,8 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         vllm_config: VllmConfig,
         kv_cache_dtype: Optional[str] = "auto",
         is_driver_worker: bool = False,
+        is_prefill: bool = True,
+        model_queue: Optional[mp.Queue] = None,
         return_hidden_states: bool = False,
         input_registry: InputRegistry = INPUT_REGISTRY,
         mm_registry: MultiModalRegistry = MULTIMODAL_REGISTRY,
@@ -1020,6 +1023,8 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         cache_config = self.cache_config
 
         self.is_driver_worker = is_driver_worker
+        self.is_prefill = is_prefill
+        self.model_queue = model_queue
         self.return_hidden_states = return_hidden_states
 
         self.device = self.device_config.device
@@ -1111,8 +1116,22 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
 
     def load_model(self) -> None:
         logger.info("Starting to load model %s...", self.model_config.model)
+        assert self.model_queue is not None
         with DeviceMemoryProfiler() as m:
-            self.model = get_model(vllm_config=self.vllm_config)
+            if self.is_prefill:
+                self.model = get_model(vllm_config=self.vllm_config)
+                logger.info("get model success")
+                state_dict = self.model.state_dict()
+                self.model_queue.put(state_dict)
+                logger.info("model put into queue")
+            else:
+                logger.info("tring to get model from model_queue")
+                self.model = get_model(vllm_config=self.vllm_config)
+                state_dict = self.model_queue.get()
+                assert state_dict is not None
+                self.model.load_state_dict(state_dict)
+                logger.info("model loaded from queue")
+            
 
         self.model_memory_usage = m.consumed_memory
         logger.info("Loading model weights took %.4f GB",

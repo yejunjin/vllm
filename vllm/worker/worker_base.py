@@ -17,12 +17,14 @@ from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.model_executor.layers.sampler import SamplerOutput
 from vllm.sequence import ExecuteModelRequest, IntermediateTensors
-from vllm.utils import (enable_trace_function_call_for_thread,
+from vllm.utils import (enable_trace_function_call_for_thread, get_mp_context,
                         resolve_obj_by_qualname, run_method,
                         update_environment_variables)
 from vllm.worker.model_runner_base import (BroadcastableModelInput,
                                            ModelRunnerBase,
                                            ModelRunnerInputBase)
+from torch import multiprocessing as mp
+import threading
 
 logger = init_logger(__name__)
 
@@ -489,6 +491,8 @@ class WorkerWrapperBase:
         self,
         vllm_config: VllmConfig,
         rpc_rank: int = 0,
+        is_prefill: bool = True,
+        model_queue: Optional[mp.Queue] = None,
     ) -> None:
         """
         Initialize the worker wrapper with the given vllm_config and rpc_rank.
@@ -501,6 +505,8 @@ class WorkerWrapperBase:
         group.
         """
         self.rpc_rank = rpc_rank
+        self.is_prefill = is_prefill
+        self.model_queue = model_queue
         self.worker: Optional[WorkerBase] = None
         # do not store this `vllm_config`, `init_worker` will set the final
         # one. TODO: investigate if we can remove this field in
@@ -538,6 +544,7 @@ class WorkerWrapperBase:
         Here we inject some common logic before initializing the worker.
         Arguments are passed to the worker class constructor.
         """
+        logger.warning(f"init worker rpc rank = {self.rpc_rank}, pid = {os.getpid()}, tid = {threading.get_ident()}")
         kwargs = all_kwargs[self.rpc_rank]
         self.vllm_config = kwargs.get("vllm_config", None)
         assert self.vllm_config is not None, (
@@ -557,7 +564,7 @@ class WorkerWrapperBase:
                 self.vllm_config.parallel_config.worker_cls)
         with set_current_vllm_config(self.vllm_config):
             # To make vLLM config available during worker initialization
-            self.worker = worker_class(**kwargs)
+            self.worker = worker_class(**kwargs, is_prefill=self.is_prefill, model_queue=self.model_queue)
             assert self.worker is not None
 
     def execute_method(self, method: Union[str, bytes], *args, **kwargs):

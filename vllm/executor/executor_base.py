@@ -6,6 +6,7 @@ from typing import (Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple,
                     Union)
 
 import torch.nn as nn
+from torch import multiprocessing as mp
 from typing_extensions import TypeVar
 
 from vllm.config import VllmConfig
@@ -36,6 +37,8 @@ class ExecutorBase(ABC):
     def __init__(
         self,
         vllm_config: VllmConfig,
+        is_prefill: bool = True,
+        model_queues: Optional[List[mp.Queue]] = None,
     ) -> None:
         self.vllm_config = vllm_config
         self.model_config = vllm_config.model_config
@@ -48,6 +51,8 @@ class ExecutorBase(ABC):
         self.speculative_config = vllm_config.speculative_config
         self.prompt_adapter_config = vllm_config.prompt_adapter_config
         self.observability_config = vllm_config.observability_config
+        self.is_prefill = is_prefill
+        self.model_queues = model_queues
         self._init_executor()
         self.is_sleeping = False
 

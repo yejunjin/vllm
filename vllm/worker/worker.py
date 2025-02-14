@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Set, Tuple, Type, Union
 
 import torch
 import torch.distributed
+from torch import multiprocessing as mp
 
 import vllm.envs as envs
 from vllm.config import VllmConfig
@@ -51,6 +52,8 @@ class Worker(LocalOrDistributedWorkerBase):
         distributed_init_method: str,
         is_driver_worker: bool = False,
         model_runner_cls: Optional[Type[GPUModelRunnerBase]] = None,
+        is_prefill: bool = True,
+        model_queue: Optional[mp.Queue] = None
     ) -> None:
         WorkerBase.__init__(self, vllm_config)
         self.parallel_config.rank = rank
@@ -83,6 +86,8 @@ class Worker(LocalOrDistributedWorkerBase):
             vllm_config=self.vllm_config,
             kv_cache_dtype=self.cache_config.cache_dtype,
             is_driver_worker=is_driver_worker,
+            is_prefill=is_prefill,
+            model_queue=model_queue,
             **speculative_args,
         )
         if model_runner_cls is not None:

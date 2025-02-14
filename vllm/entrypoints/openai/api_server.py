@@ -17,7 +17,8 @@ from argparse import Namespace
 from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
-from typing import AsyncIterator, Dict, Optional, Set, Tuple, Union
+from typing import AsyncIterator, Dict, List, Optional, Set, Tuple, Union
+from torch import multiprocessing as mp
 
 import uvloop
 from fastapi import APIRouter, FastAPI, HTTPException, Request
@@ -80,7 +81,7 @@ from vllm.entrypoints.openai.tool_parsers import ToolParserManager
 from vllm.entrypoints.utils import with_cancellation
 from vllm.logger import init_logger
 from vllm.usage.usage_lib import UsageContext
-from vllm.utils import (FlexibleArgumentParser, get_open_zmq_ipc_path,
+from vllm.utils import (FlexibleArgumentParser, get_mp_context, get_open_zmq_ipc_path,
                         is_valid_ipv6_address, set_ulimit)
 from vllm.version import __version__ as VLLM_VERSION
 
@@ -127,20 +128,24 @@ async def lifespan(app: FastAPI):
 
 @asynccontextmanager
 async def build_async_engine_client(
-        args: Namespace) -> AsyncIterator[EngineClient]:
+        args: Namespace,
+        is_prefill: bool = True,
+        model_queues: Optional[List[mp.Queue]] = None) -> AsyncIterator[EngineClient]:
 
     # Context manager to handle engine_client lifecycle
     # Ensures everything is shutdown and cleaned up on error/exit
     engine_args = AsyncEngineArgs.from_cli_args(args)
 
     async with build_async_engine_client_from_engine_args(
-            engine_args, args.disable_frontend_multiprocessing) as engine:
+            engine_args, is_prefill, model_queues, args.disable_frontend_multiprocessing) as engine:
         yield engine
 
 
 @asynccontextmanager
 async def build_async_engine_client_from_engine_args(
     engine_args: AsyncEngineArgs,
+    is_prefill: bool = True,
+    model_queues: Optional[List[mp.Queue]] = None,
     disable_frontend_multiprocessing: bool = False,
 ) -> AsyncIterator[EngineClient]:
     """
@@ -199,7 +204,7 @@ async def build_async_engine_client_from_engine_args(
         engine_process = context.Process(target=run_mp_engine,
                                          args=(engine_args,
                                                UsageContext.OPENAI_API_SERVER,
-                                               ipc_path, engine_alive))
+                                               ipc_path, engine_alive, is_prefill, model_queues))
         engine_process.start()
         engine_pid = engine_process.pid
         assert engine_pid is not None, "Engine process failed to start."
@@ -872,9 +877,12 @@ async def run_server(args, **uvicorn_kwargs) -> None:
 
     signal.signal(signal.SIGTERM, signal_handler)
 
-    async with build_async_engine_client(args) as prefill_client, \
-        build_async_engine_client(args) as decode_client:
-        engine_client = FusedEngineClient(prefill_client, decode_client)
+    mp = get_mp_context()
+    model_queues = [mp.Queue() for _ in range(args.tensor_parallel_size)]
+    async with build_async_engine_client(args, is_prefill=True, model_queues=model_queues) as prefill_client, \
+        build_async_engine_client(args, is_prefill=False, model_queues=model_queues) as decode_client:
+        # engine_client = FusedEngineClient(prefill_client, decode_client)
+        engine_client = decode_client
         app = build_app(args)
 
         model_config = await engine_client.get_model_config()

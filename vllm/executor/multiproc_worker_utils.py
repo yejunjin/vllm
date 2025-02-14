@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from multiprocessing import Queue
 from multiprocessing.connection import wait
 from multiprocessing.process import BaseProcess
+from torch import multiprocessing as mp
 from typing import (Any, Callable, Dict, Generic, List, Optional, TextIO,
                     TypeVar, Union)
 
@@ -151,7 +152,9 @@ class ProcessWorkerWrapper:
 
     def __init__(self, result_handler: ResultHandler,
                  worker_factory: Callable[[VllmConfig, int], Any],
-                 vllm_config: VllmConfig, rank: int) -> None:
+                 vllm_config: VllmConfig, rank: int,
+                 is_prefill: bool = True,
+                 model_queue: Optional[mp.Queue] = None) -> None:
         self.mp = get_mp_context()
         self._task_queue = self.mp.Queue()
         self.result_queue = result_handler.result_queue
@@ -165,6 +168,8 @@ class ProcessWorkerWrapper:
                 result_queue=self.result_queue,
                 vllm_config=vllm_config,
                 rank=rank,
+                is_prefill=is_prefill,
+                model_queue=model_queue,
             ),
             daemon=True)
 
@@ -211,9 +216,11 @@ def _run_worker_process(
     result_queue: Queue,
     vllm_config: VllmConfig,
     rank: int,
+    is_prefill: bool = True,
+    model_queue: Optional[mp.Queue] = None,
 ) -> None:
     """Worker process event loop"""
-
+    logger.warning("passing model queue success in ProcessWorkerWrapper")
     # Add process-specific prefix to stdout and stderr
     process_name = get_mp_context().current_process().name
     pid = os.getpid()
@@ -221,7 +228,7 @@ def _run_worker_process(
     _add_prefix(sys.stderr, process_name, pid)
 
     # Initialize worker
-    worker = worker_factory(vllm_config, rank)
+    worker = worker_factory(vllm_config, rank, is_prefill, model_queue)
     del worker_factory
 
     # Accept tasks from the engine in task_queue

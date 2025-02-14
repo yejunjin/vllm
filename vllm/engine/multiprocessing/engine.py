@@ -4,6 +4,7 @@ import pickle
 import signal
 from contextlib import contextmanager
 from typing import Iterator, List, Optional, Union
+from torch import multiprocessing as mp
 
 import cloudpickle
 import zmq
@@ -109,7 +110,9 @@ class MQLLMEngine:
 
     @classmethod
     def from_engine_args(cls, engine_args: AsyncEngineArgs,
-                         usage_context: UsageContext, ipc_path: str):
+                         usage_context: UsageContext, ipc_path: str,
+                         is_prefill: bool = True,
+                         model_queues: Optional[List[mp.Queue]] = None):
         """Creates an MQLLMEngine from the engine arguments."""
         # Setup plugins for each process
         from vllm.plugins import load_general_plugins
@@ -126,7 +129,9 @@ class MQLLMEngine:
                    executor_class=executor_class,
                    log_requests=not engine_args.disable_log_requests,
                    log_stats=not engine_args.disable_log_stats,
-                   usage_context=usage_context)
+                   usage_context=usage_context,
+                   is_prefill=is_prefill,
+                   model_queues=model_queues)
 
     def start(self):
         try:
@@ -375,11 +380,13 @@ def signal_handler(*_) -> None:
 
 
 def run_mp_engine(engine_args: AsyncEngineArgs, usage_context: UsageContext,
-                  ipc_path: str, engine_alive):
+                  ipc_path: str, engine_alive, is_prefill: bool = False, model_queues: Optional[List[mp.Queue]] = None):
     try:
         engine = MQLLMEngine.from_engine_args(engine_args=engine_args,
                                               usage_context=usage_context,
-                                              ipc_path=ipc_path)
+                                              ipc_path=ipc_path,
+                                              is_prefill=is_prefill,
+                                              model_queues=model_queues)
 
         signal.signal(signal.SIGTERM, signal_handler)
 

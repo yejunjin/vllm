@@ -11,6 +11,7 @@ from typing import (TYPE_CHECKING, Callable, ClassVar, Deque, Dict, Iterable,
                     List, Mapping, NamedTuple, Optional)
 from typing import Sequence as GenericSequence
 from typing import Set, Type, Union, cast, overload
+from torch import multiprocessing as mp
 
 import torch
 from typing_extensions import TypeVar, deprecated
@@ -214,6 +215,8 @@ class LLMEngine:
         input_registry: InputRegistry = INPUT_REGISTRY,
         mm_registry: MultiModalRegistry = MULTIMODAL_REGISTRY,
         use_cached_outputs: bool = False,
+        is_prefill: bool = True,
+        model_queues: Optional[List[mp.Queue]] = None,
     ) -> None:
 
         self.vllm_config = vllm_config
@@ -270,7 +273,7 @@ class LLMEngine:
         self.input_processor = input_registry.create_input_processor(
             self.model_config)
 
-        self.model_executor = executor_class(vllm_config=vllm_config, )
+        self.model_executor = executor_class(vllm_config=vllm_config, is_prefill=is_prefill, model_queues=model_queues)
 
         if self.model_config.runner_type != "pooling":
             self._initialize_kv_caches()
