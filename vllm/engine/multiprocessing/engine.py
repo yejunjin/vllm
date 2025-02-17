@@ -10,6 +10,7 @@ import cloudpickle
 import zmq
 
 from vllm import AsyncEngineArgs, SamplingParams
+from vllm.config import KVTransferConfig
 from vllm.engine.llm_engine import LLMEngine
 # yapf conflicts with isort for this block
 # yapf: disable
@@ -72,7 +73,7 @@ class MQLLMEngine:
         # output is immediately pickled and send over the socket, which frees
         # the python object to be reused again.
         kwargs['use_cached_outputs'] = True
-
+        self.is_prefill = kwargs['is_prefill']
         self.engine = LLMEngine(*args, **kwargs)
         self.log_requests = log_requests
 
@@ -277,7 +278,7 @@ class MQLLMEngine:
                 priority=request.priority)
 
             if self.log_requests:
-                logger.info("Added request %s.", request.request_id)
+                logger.info(("[Prefill]" if self.is_prefill else "[Decode]") + "Added request %s.", request.request_id)
 
         except Exception as e:
             # We do not set self._errored = True here, since the error

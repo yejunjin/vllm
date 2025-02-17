@@ -88,9 +88,10 @@ class MQLLMEngineClient(EngineClient):
     """
 
     def __init__(self, ipc_path: str, engine_config: VllmConfig,
-                 engine_pid: int):
+                 engine_pid: int, is_prefill: bool = True):
         self.context = zmq.asyncio.Context()
         self._errored_with: Optional[BaseException] = None
+        self.is_prefill = is_prefill
 
         # Get the configs.
         self.model_config = engine_config.model_config
@@ -501,7 +502,7 @@ class MQLLMEngineClient(EngineClient):
             prompt = inputs
         assert (prompt is not None and sampling_params is not None
                 and request_id is not None)
-
+        logger.warning(("before _process_request [Prefill]" if self.is_prefill else "[Decode]") + "send request id: " + request_id)
         return self._process_request(prompt, sampling_params, request_id,
                                      lora_request, trace_headers,
                                      prompt_adapter_request, priority)
@@ -591,7 +592,7 @@ class MQLLMEngineClient(EngineClient):
     ) -> Union[AsyncGenerator[RequestOutput, None], AsyncGenerator[
             PoolingRequestOutput, None]]:
         """Send an RPCGenerateRequest to the RPCServer and stream responses."""
-
+        logger.warning(("enter _process_request [Prefill]" if self.is_prefill else "[Decode]") + "send request id: " + request_id)
         # If already dead, error out.
         if self._errored_with is not None:
             raise ENGINE_DEAD_ERROR(self._errored_with)
@@ -647,6 +648,7 @@ class MQLLMEngineClient(EngineClient):
             parts = (request_bytes,
                      lp_bytes) if lp_bytes else (request_bytes, )
             await self.input_socket.send_multipart(parts, copy=False)
+            logger.warning(("[Prefill]" if self.is_prefill else "[Decode]") + "send request id: " + request_id)
 
             # 4) Stream the RequestOutputs from the output queue. Note
             # that the output_loop pushes RequestOutput objects to this
@@ -713,7 +715,6 @@ class FusedEngineClient(EngineClient):
     def __init__(self, prefill_client: EngineClient, decode_client: EngineClient):
         self.prefill_client = prefill_client
         self.decode_client = decode_client
-        self.request_tracker = {}
 
     @property 
     def is_running(self) -> bool:
@@ -743,17 +744,15 @@ class FusedEngineClient(EngineClient):
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
         priority: int = 0,
     ) -> AsyncGenerator[RequestOutput, None]:
-        # TODO: it is for test only
+        prefill_generator = self.prefill_client.generate(prompt, sampling_params, request_id, lora_request, trace_headers, prompt_adapter_request, priority)
+        decode_generator = self.decode_client.generate(prompt, sampling_params, request_id, lora_request, trace_headers, prompt_adapter_request, priority)
+        async def combine_generators(gen1: AsyncGenerator[RequestOutput, None], gen2: AsyncGenerator[RequestOutput, None]) -> AsyncGenerator[RequestOutput, None]:
+            async for _ in gen1:
+                pass
+            async for value in gen2:
+                yield value
+        return combine_generators(prefill_generator, decode_generator)
 
-        # random to delegate to prefill or decode client
-        if random.random() < 0.5:
-            logger.info("choosing prefill")
-            client = self.prefill_client
-        else:
-            logger.info("choosing decode")
-            client = self.decode_client
-        self.request_tracker[request_id] = client
-        return client.generate(prompt, sampling_params, request_id, lora_request, trace_headers, prompt_adapter_request, priority)
 
     def encode(
         self,
@@ -768,8 +767,8 @@ class FusedEngineClient(EngineClient):
     
     
     async def abort(self, request_id: str) -> None:
-        client = self.request_tracker[request_id]
-        await client.abort(request_id)
+        await self.prefill_client.abort(request_id)
+        await self.decode_client.abort(request_id)
 
     async def get_model_config(self) -> ModelConfig:
         return await self.prefill_client.get_model_config()

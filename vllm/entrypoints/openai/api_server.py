@@ -221,7 +221,7 @@ async def build_async_engine_client_from_engine_args(
         # Build RPCClient, which conforms to EngineClient Protocol.
         engine_config = engine_args.create_engine_config()
         build_client = partial(MQLLMEngineClient, ipc_path, engine_config,
-                               engine_pid)
+                               engine_pid, is_prefill)
         mq_engine_client = await asyncio.get_running_loop().run_in_executor(
             None, build_client)
         try:
@@ -881,8 +881,8 @@ async def run_server(args, **uvicorn_kwargs) -> None:
     model_queues = [mp.Queue() for _ in range(args.tensor_parallel_size)]
     async with build_async_engine_client(args, is_prefill=True, model_queues=model_queues) as prefill_client, \
         build_async_engine_client(args, is_prefill=False, model_queues=model_queues) as decode_client:
-        # engine_client = FusedEngineClient(prefill_client, decode_client)
-        engine_client = decode_client
+        engine_client = FusedEngineClient(prefill_client, decode_client)
+        # engine_client = decode_client
         app = build_app(args)
 
         model_config = await engine_client.get_model_config()

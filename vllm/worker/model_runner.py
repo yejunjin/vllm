@@ -1722,6 +1722,15 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     model_input,
                     kv_caches=kv_caches
                 )
+        # if need recv kv from model_queue
+        if self.need_recv_kv2(model_input, kv_caches):
+            logger.warning(f"wait for recv kv_caches")
+            hidden_or_intermediate_states, tmp_kv_caches = self.model_queue.get()
+            if len(kv_caches) > 0:
+                logger.warning(f"get kv cache success, layers =  {len(kv_caches)}, shape = {kv_caches[0].shape}")
+            for i, cache in enumerate(tmp_kv_caches):
+                kv_caches[i].copy_(cache) 
+            bypass_model_exec = True
 
         multi_modal_kwargs = model_input.multi_modal_kwargs or {}
         seqlen_agnostic_kwargs = {
@@ -1763,6 +1772,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                 kv_caches,
                 hidden_or_intermediate_states,
             )
+        if self.need_send_kv2(model_input, kv_caches):
+            logger.warning(f"going to send kv caches")
+            self.model_queue.put((hidden_or_intermediate_states, kv_caches))
+            if len(kv_caches) > 0:
+                logger.warning(f"put kv cache success, layers =  {len(kv_caches)}, shape = {kv_caches[0].shape}")
 
         # Compute the logits in the last pipeline stage.
         if not get_pp_group().is_last_rank:
@@ -1856,6 +1870,17 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         return self.vllm_config.kv_transfer_config.is_kv_consumer and (
             not is_profile_run) and is_prefill_run
 
+    def need_recv_kv2(self, model_input, kv_caches) -> bool:
+        if self.model_queue is None:
+            return False
+        
+        prefill_meta = model_input.attn_metadata.prefill_metadata
+        # check if the current run is profiling
+        is_profile_run = (kv_caches[0].numel() == 0)
+        # check if the current run is prefill
+        is_prefill_run = prefill_meta is not None
+        return (not self.is_prefill) and (not is_profile_run) and is_prefill_run
+
     def need_send_kv(self, model_input, kv_caches) -> bool:
         """Check if we need to send kv-cache to the other worker.
         We need to send KV when
@@ -1880,6 +1905,18 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
         return self.vllm_config.kv_transfer_config.is_kv_producer and (
             not is_profile_run) and is_prefill_run
+
+    def need_send_kv2(self, model_input, kv_caches) -> bool:
+        if self.model_queue is None:
+            return False
+        
+        prefill_meta = model_input.attn_metadata.prefill_metadata
+
+        # check if the current run is profiling
+        is_profile_run = (kv_caches[0].numel() == 0)
+        # check if the current run is prefill
+        is_prefill_run = prefill_meta is not None
+        return self.is_prefill and (not is_profile_run) and is_prefill_run
 
 
 # NOTE: this is nn.Module so the profiler can properly capture/group
