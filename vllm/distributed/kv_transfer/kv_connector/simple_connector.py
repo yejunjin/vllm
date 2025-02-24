@@ -60,16 +60,22 @@ class SimpleConnector(KVConnectorBase):
                 logger.info(
                     "Initializing MooncakeConfig under kv_transfer_config %s",
                     self.config)
+            elif self.config.kv_connector == "ZMQConnector":
+                from vllm.distributed.kv_transfer.kv_pipe.zmq_pipe import (
+                    ZMQPipe)
+                logger.info(
+                    "Initializing ZMQConfig under kv_transfer_config %s",
+                    self.config)
 
         self.lookup_buffer_size = self.config.kv_buffer_size
 
         self.producer_buffer: Optional[SimpleBuffer] = None
         self.consumer_buffer: Optional[SimpleBuffer] = None
 
-        self.producer_data_pipe: Union[PyNcclPipe, MooncakePipe]
-        self.consumer_data_pipe: Union[PyNcclPipe, MooncakePipe]
-        self.producer_signal_pipe: Union[PyNcclPipe, MooncakePipe]
-        self.consumer_signal_pipe: Union[PyNcclPipe, MooncakePipe]
+        self.producer_data_pipe: Union[PyNcclPipe, MooncakePipe, ZMQPipe]
+        self.consumer_data_pipe: Union[PyNcclPipe, MooncakePipe, ZMQPipe]
+        self.producer_signal_pipe: Union[PyNcclPipe, MooncakePipe, ZMQPipe]
+        self.consumer_signal_pipe: Union[PyNcclPipe, MooncakePipe, ZMQPipe]
 
         # 2 pipes for every rank in the world
         port_offset_base = 2 * rank
@@ -97,6 +103,18 @@ class SimpleConnector(KVConnectorBase):
                 )
                 # We only need to initialize MooncakePipe once
                 self.producer_signal_pipe = self.producer_data_pipe
+            elif self.config.kv_connector == "ZMQConnector":
+                self.producer_data_pipe = ZMQPipe(
+                    local_rank=local_rank,
+                    config=self.config,
+                    port_offset=port_offset_base,
+                )
+                self.producer_signal_pipe = ZMQPipe(
+                    local_rank=local_rank,
+                    config=self.config,
+                    port_offset=port_offset_base + 1,
+                    device="cpu",
+                )
 
             self.producer_buffer = SimpleBuffer(self.producer_signal_pipe,
                                                 self.producer_data_pipe,
@@ -124,6 +142,18 @@ class SimpleConnector(KVConnectorBase):
                     config=self.config,
                 )
                 self.consumer_signal_pipe = self.consumer_data_pipe
+            elif self.config.kv_connector == "ZMQConnector":
+                self.consumer_data_pipe = ZMQPipe(
+                    local_rank=local_rank,
+                    config=self.config,
+                    port_offset=port_offset_base,
+                )
+                self.consumer_signal_pipe = ZMQPipe(
+                    local_rank=local_rank,
+                    config=self.config,
+                    port_offset=port_offset_base + 1,
+                    device="cpu",
+                )
 
             self.consumer_buffer = SimpleBuffer(
                 self.consumer_signal_pipe,
