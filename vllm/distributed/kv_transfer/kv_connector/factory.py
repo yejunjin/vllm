@@ -48,3 +48,8 @@ KVConnectorFactory.register_connector(
     "MooncakeConnector",
     "vllm.distributed.kv_transfer.kv_connector.simple_connector",
     "SimpleConnector")
+
+KVConnectorFactory.register_connector(
+    "ZMQConnector",
+    "vllm.distributed.kv_transfer.kv_connector.simple_connector",
+    "SimpleConnector")
