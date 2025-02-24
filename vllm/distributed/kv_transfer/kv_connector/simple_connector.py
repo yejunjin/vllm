@@ -60,12 +60,12 @@ class SimpleConnector(KVConnectorBase):
                 logger.info(
                     "Initializing MooncakeConfig under kv_transfer_config %s",
                     self.config)
-            elif self.config.kv_connector == "ZMQConnector":
-                from vllm.distributed.kv_transfer.kv_pipe.zmq_pipe import (
-                    ZMQPipe)
-                logger.info(
-                    "Initializing ZMQConfig under kv_transfer_config %s",
-                    self.config)
+        elif self.config.kv_connector == "ZMQConnector":
+            from vllm.distributed.kv_transfer.kv_pipe.zmq_pipe import (
+                ZMQPipe)
+            logger.info(
+                "Initializing ZMQConfig under kv_transfer_config %s",
+                self.config)
 
         self.lookup_buffer_size = self.config.kv_buffer_size
 

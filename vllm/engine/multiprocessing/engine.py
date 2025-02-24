@@ -382,6 +382,26 @@ def signal_handler(*_) -> None:
 
 def run_mp_engine(engine_args: AsyncEngineArgs, usage_context: UsageContext,
                   ipc_path: str, engine_alive, is_prefill: bool = False, model_queues: Optional[List[mp.Queue]] = None):
+    if is_prefill:
+        engine_args.kv_transfer_config = KVTransferConfig.from_cli(
+            """
+            {
+                "kv_connector":"ZMQConnector",
+                "kv_role":"kv_producer",
+                "kv_rank":0,
+                "kv_parallel_size":2
+            }
+            """)
+    else:
+        engine_args.kv_transfer_config = KVTransferConfig.from_cli(
+            """
+            {
+                "kv_connector":"ZMQConnector",
+                "kv_role":"kv_consumer",
+                "kv_rank":1,
+                "kv_parallel_size":2
+            }
+            """)
     try:
         engine = MQLLMEngine.from_engine_args(engine_args=engine_args,
                                               usage_context=usage_context,
