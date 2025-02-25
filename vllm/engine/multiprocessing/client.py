@@ -744,7 +744,9 @@ class FusedEngineClient(EngineClient):
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
         priority: int = 0,
     ) -> AsyncGenerator[RequestOutput, None]:
-        prefill_generator = self.prefill_client.generate(prompt, sampling_params, request_id, lora_request, trace_headers, prompt_adapter_request, priority)
+        prefill_sampling_params = copy.copy(sampling_params)
+        prefill_sampling_params.max_tokens = 1
+        prefill_generator = self.prefill_client.generate(prompt, prefill_sampling_params, request_id, lora_request, trace_headers, prompt_adapter_request, priority)
         decode_generator = self.decode_client.generate(prompt, sampling_params, request_id, lora_request, trace_headers, prompt_adapter_request, priority)
         async def combine_generators(gen1: AsyncGenerator[RequestOutput, None], gen2: AsyncGenerator[RequestOutput, None]) -> AsyncGenerator[RequestOutput, None]:
             async for _ in gen1:
