@@ -379,13 +379,16 @@ class DefaultModelLoader(BaseModelLoader):
 
         target_device = torch.device(device_config.device)
         with set_default_torch_dtype(model_config.dtype):
-            with target_device:
-                model = _initialize_model(vllm_config=vllm_config)
-                if state_dict:
+            if state_dict:
+                with torch.device("cpu"):
+                    model = _initialize_model(vllm_config=vllm_config)
                     for name, param in model.named_parameters():
                         if name in state_dict:
                             param.data = state_dict[name].data  # Direct assignment
                     return model.eval()
+            else:
+                with target_device:
+                    model = _initialize_model(vllm_config=vllm_config)
 
             weights_to_load = {name for name, _ in model.named_parameters()}
             loaded_weights = model.load_weights(
