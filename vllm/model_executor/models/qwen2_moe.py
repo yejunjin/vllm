@@ -129,11 +129,12 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
                 quant_config=quant_config,
                 reduce_results=False,
             )
+            self.shared_expert_gate = torch.nn.Linear(config.hidden_size,
+                                                      1,
+                                                      bias=False)
         else:
             self.shared_expert = None
-        self.shared_expert_gate = torch.nn.Linear(config.hidden_size,
-                                                  1,
-                                                  bias=False)
+            self.shared_expert_gate = None
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         # NOTE: hidden_states can have either 1D or 2D shape.
@@ -170,6 +171,10 @@ class Qwen2MoeAttention(nn.Module):
         rope_theta: float = 10000,
         rope_scaling: Optional[Dict[str, Any]] = None,
         max_position_embeddings: int = 8192,
+        qk_norm: bool = False,
+        head_dim: Optional[int] = None,
+        rms_norm_eps: float = 1e-06,
+        qkv_bias: bool = True,
         cache_config: Optional[CacheConfig] = None,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
@@ -190,7 +195,7 @@ class Qwen2MoeAttention(nn.Module):
             # the KV heads across multiple tensor parallel GPUs.
             assert tp_size % self.total_num_kv_heads == 0
         self.num_kv_heads = max(1, self.total_num_kv_heads // tp_size)
-        self.head_dim = hidden_size // self.total_num_heads
+        self.head_dim = head_dim or (hidden_size // self.total_num_heads)
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim**-0.5
@@ -202,7 +207,7 @@ class Qwen2MoeAttention(nn.Module):
             self.head_dim,
             self.total_num_heads,
             self.total_num_kv_heads,
-            bias=True,
+            bias=qkv_bias,
             quant_config=quant_config,
         )
 
@@ -227,6 +232,9 @@ class Qwen2MoeAttention(nn.Module):
                               cache_config=cache_config,
                               quant_config=quant_config,
                               prefix=f"{prefix}.attn")
+        self.qk_norm = qk_norm
+        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps) if self.qk_norm else None
+        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps) if self.qk_norm else None
 
     def forward(
         self,
@@ -237,6 +245,15 @@ class Qwen2MoeAttention(nn.Module):
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+
+        if self.qk_norm:
+            q_by_head = q.view(*q.shape[:-1], q.shape[-1] // self.head_dim, self.head_dim)
+            q_by_head = self.q_norm.forward_native(q_by_head)
+            q = q_by_head.view(q.shape)
+            k_by_head = k.view(*k.shape[:-1], k.shape[-1] // self.head_dim, self.head_dim)
+            k_by_head = self.k_norm.forward_native(k_by_head)
+            k = k_by_head.view(k.shape)
+
         q, k = self.rotary_emb(positions, q, k)
         attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
         output, _ = self.o_proj(attn_output)
@@ -265,6 +282,10 @@ class Qwen2MoeDecoderLayer(nn.Module):
             rope_theta=rope_theta,
             rope_scaling=rope_scaling,
             max_position_embeddings=max_position_embeddings,
+            qk_norm=getattr(config, 'use_qk_norm', False),
+            head_dim=getattr(config, 'head_dim', None),
+            rms_norm_eps=config.rms_norm_eps,
+            qkv_bias=getattr(config, 'qkv_bias', True),
             cache_config=cache_config,
             quant_config=quant_config,
             prefix=f"{prefix}.self_attn",
