@@ -193,7 +193,7 @@ class SimpleConnector(KVConnectorBase):
         end_layer = model_executable.model.end_layer
 
         model_config = model_executable.model.config
-        num_heads = int(model_config.num_key_value_heads / self.tp_size)
+        num_heads = max(1, int(model_config.num_key_value_heads / self.tp_size))
         hidden_size = model_config.hidden_size
         num_attention_heads = model_config.num_attention_heads
         head_size = int(hidden_size / num_attention_heads)
