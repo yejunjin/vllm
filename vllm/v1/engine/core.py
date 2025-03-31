@@ -5,7 +5,8 @@ import signal
 import sys
 import threading
 import time
-from concurrent.futures import Future
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from inspect import isclass, signature
 from logging import DEBUG
 from typing import Any, Optional
@@ -99,6 +100,13 @@ class EngineCore:
             log_stats=self.log_stats,
             structured_output_manager=self.structured_output_manager,
         )
+
+        self.overlap_executor = ThreadPoolExecutor(max_workers=1)
+        # The max inflight executing should be 2.
+        # one is executing in worker and the other is waiting for executing
+        self.inflight_executions: deque[tuple[Future[ModelRunnerOutput],
+                                              SchedulerOutput]] = deque(
+                                                  maxlen=1)
 
         # Setup MM Input Mapper.
         self.mm_input_cache_server = MMInputCacheServer(
@@ -203,6 +211,57 @@ class EngineCore:
             scheduler_output, output)  # type: ignore
 
         return engine_core_outputs
+
+    def _step_with_overlap(self) -> Optional[EngineCoreOutputs]:
+        """Schedule T+1, execute T overlap, and make output"""
+        # Check for any requests remaining in the scheduler - unfinished,
+        # or finished and not yet removed from the batch.
+        if (not self.scheduler.has_requests()
+                and len(self.inflight_executions) == 0):
+            return EngineCoreOutputs(
+                outputs=[],
+                scheduler_stats=self.scheduler.make_stats(),
+            )
+
+        engine_core_outputs: Optional[EngineCoreOutputs] = None
+        if self.inflight_executions:
+            # Check if we should process the first execution
+            future, scheduler_output = self.inflight_executions[0]
+            logger.info("Processing inflight execution")
+
+            # Process if either:
+            # 1. The future is already completed
+            # 2. We've reached max concurrent executions
+            if (future.done() or len(self.inflight_executions)
+                    == self.inflight_executions.maxlen):
+                try:
+                    # Block until completion if not done yet
+                    output = future.result()
+                    engine_core_outputs = self.scheduler.update_from_output(
+                        scheduler_output, output)  # type: ignore
+                    logger.info("future done %s", output)
+                except Exception as e:
+                    logger.exception("Execution failed: %s", e)
+                    raise
+                finally:
+                    # Always remove the completed/failed execution
+                    self.inflight_executions.popleft()
+                    logger.info("Removed inflight execution")
+
+        scheduler_output = self.scheduler.schedule()
+        logger.info("submit execute_model to model executor")
+        future = self.overlap_executor.submit(
+            self.model_executor.execute_model,  # type: ignore
+            scheduler_output)
+        self.inflight_executions.append((future, scheduler_output))
+        return engine_core_outputs
+
+    def step_with_overlap(self) -> EngineCoreOutputs:
+        # loop until _step_with_overlap return non-None
+        while True:
+            engine_core_outputs = self._step_with_overlap()
+            if engine_core_outputs is not None:
+                return engine_core_outputs
 
     def step_with_batch_queue(self) -> Optional[EngineCoreOutputs]:
         """Schedule and execute batches with the batch queue.
@@ -312,7 +371,7 @@ class EngineCoreProc(EngineCore):
 
         self.global_unfinished_reqs = False
 
-        self.step_fn = (self.step if self.batch_queue is None else
+        self.step_fn = (self.step_with_overlap if self.batch_queue is None else
                         self.step_with_batch_queue)
 
     @staticmethod
