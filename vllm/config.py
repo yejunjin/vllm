@@ -1664,6 +1664,8 @@ class SchedulerConfig:
 
     multi_step_stream_outputs: bool = False
 
+    sliding_window_size: int = 1
+
     # Private API. If used, scheduler sends delta data to
     # workers instead of an entire data. It should be enabled only
     # when SPMD worker architecture is enabled. I.e.,

@@ -60,6 +60,7 @@ class CachedRequestData:
     new_token_ids: list[int]
     new_block_ids: list[int]
     num_computed_tokens: int
+    new_token_idices: Optional[list[int]]
 
     @classmethod
     def from_request(
@@ -68,6 +69,7 @@ class CachedRequestData:
         resumed_from_preemption: bool,
         new_token_ids: list[int],
         new_block_ids: list[int],
+        new_token_idices: Optional[list[int]] = None,
     ) -> CachedRequestData:
         return cls(
             req_id=request.request_id,
@@ -75,6 +77,7 @@ class CachedRequestData:
             new_token_ids=new_token_ids,
             new_block_ids=new_block_ids,
             num_computed_tokens=request.num_computed_tokens,
+            new_token_idices=new_token_idices,
         )
 
 
