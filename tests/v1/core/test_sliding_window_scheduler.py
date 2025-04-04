@@ -18,6 +18,7 @@ def create_sliding_window_scheduler(
     max_num_batched_tokens: int = 8192,
     enable_prefix_caching: Optional[bool] = None,
     long_prefill_token_threshold: int = 0,
+    sliding_window_size: int = 1,
 ) -> SlidingWindowScheduler:
     '''Create sliding windows scheduler under test.
 
@@ -37,6 +38,7 @@ def create_sliding_window_scheduler(
         max_num_batched_tokens=max_num_batched_tokens,
         max_model_len=max_num_batched_tokens,
         long_prefill_token_threshold=long_prefill_token_threshold,
+        sliding_window_size=sliding_window_size,
     )
     # Cache config, optionally force APC
     kwargs_cache = ({} if enable_prefix_caching is None else {
@@ -523,3 +525,90 @@ def test_stop_via_update_from_output():
     assert len(scheduler.running) == 1
     assert not requests[0].is_finished()
     assert list(requests[0].output_token_ids) == [EOS_TOKEN_ID, 10, 11]
+
+
+@pytest.mark.parametrize("enable_prefix_caching, prompt_logprobs", [
+    (None, None),
+    (True, 5),
+])
+def test_schedule_concurrent_batches(enable_prefix_caching: Optional[bool],
+                                     prompt_logprobs: Optional[int]):
+    scheduler = create_sliding_window_scheduler(
+        max_num_batched_tokens=1024,
+        max_num_seqs=2,
+        enable_prefix_caching=enable_prefix_caching,
+        sliding_window_size=2,
+    )
+    requests = create_requests(
+        num_requests=2,
+        num_tokens=512,
+        prompt_logprobs=prompt_logprobs,
+    )
+
+    # Schedule the step 0.
+    scheduler.add_request(requests[0])
+    scheduler_output0 = scheduler.schedule()
+    assert len(scheduler_output0.scheduled_new_reqs) == 1
+    assert scheduler_output0.num_scheduled_tokens[
+        requests[0].request_id] == 512
+
+    # Schedule the step 1.
+    scheduler.add_request(requests[1])
+    scheduler_output1 = scheduler.schedule()
+    assert len(scheduler_output1.scheduled_new_reqs) == 1
+    assert len(scheduler_output1.scheduled_cached_reqs) == 1
+    assert scheduler_output1.num_scheduled_tokens[requests[0].request_id] == 1
+    assert scheduler_output1.num_scheduled_tokens[
+        requests[1].request_id] == 512
+
+    # Model output of the step 0.
+    model_runner_output = ModelRunnerOutput(
+        req_ids=[requests[0].request_id],
+        req_id_to_index={requests[0].request_id: 0},
+        sampled_token_ids=[[0]],
+        spec_token_ids=None,
+        logprobs=None,
+        prompt_logprobs_dict={},
+    )
+    scheduler.update_from_output(scheduler_output0, model_runner_output)
+
+    # Schedule the step 2.
+    scheduler_output2 = scheduler.schedule()
+    assert len(scheduler_output2.scheduled_new_reqs) == 0
+    assert len(scheduler_output2.scheduled_cached_reqs) == 2
+    assert scheduler_output2.num_scheduled_tokens[requests[0].request_id] == 1
+    assert scheduler_output2.num_scheduled_tokens[requests[1].request_id] == 1
+
+    # Model output of the step 1.
+    model_runner_output = ModelRunnerOutput(
+        req_ids=[requests[0].request_id, requests[1].request_id],
+        req_id_to_index={
+            requests[0].request_id: 0,
+            requests[1].request_id: 1
+        },
+        sampled_token_ids=[[0], [0]],
+        spec_token_ids=None,
+        logprobs=None,
+        prompt_logprobs_dict={},
+    )
+    scheduler.update_from_output(scheduler_output1, model_runner_output)
+
+    # Schedule the step 3.
+    scheduler_output3 = scheduler.schedule()
+    assert len(scheduler_output3.scheduled_cached_reqs) == 2
+    assert scheduler_output3.num_scheduled_tokens[requests[0].request_id] == 1
+    assert scheduler_output3.num_scheduled_tokens[requests[1].request_id] == 1
+
+    # Model output of the step 2.
+    model_runner_output = ModelRunnerOutput(
+        req_ids=[requests[0].request_id, requests[1].request_id],
+        req_id_to_index={
+            requests[0].request_id: 0,
+            requests[1].request_id: 1
+        },
+        sampled_token_ids=[[0], [0]],
+        spec_token_ids=None,
+        logprobs=None,
+        prompt_logprobs_dict={},
+    )
+    scheduler.update_from_output(scheduler_output2, model_runner_output)
