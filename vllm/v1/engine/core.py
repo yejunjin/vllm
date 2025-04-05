@@ -198,7 +198,10 @@ class EngineCore:
                 scheduler_stats=self.scheduler.make_stats(),
             )
         scheduler_output = self.scheduler.schedule()
-        output = self.model_executor.execute_model(scheduler_output)
+        output_future: Future[
+            ModelRunnerOutput] = self.model_executor.execute_model(
+                scheduler_output)  # type: ignore
+        output = output_future.result()
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, output)  # type: ignore
 

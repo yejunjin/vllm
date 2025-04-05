@@ -39,8 +39,9 @@ class Executor(ExecutorBase):
                 RayDistributedExecutor)
             executor_class = RayDistributedExecutor
         elif distributed_executor_backend == "mp":
-            from vllm.v1.executor.multiproc_executor import MultiprocExecutor
-            executor_class = MultiprocExecutor
+            from vllm.v1.executor.async_multiproc_executor import (  # noqa
+                AsyncMultiprocExecutor)
+            executor_class = AsyncMultiprocExecutor
         elif distributed_executor_backend == "uni":
             executor_class = UniProcExecutor
         elif distributed_executor_backend == "external_launcher":
