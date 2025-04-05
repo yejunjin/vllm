@@ -612,3 +612,89 @@ def test_schedule_concurrent_batches(enable_prefix_caching: Optional[bool],
         prompt_logprobs_dict={},
     )
     scheduler.update_from_output(scheduler_output2, model_runner_output)
+
+
+@pytest.mark.parametrize("enable_prefix_caching, prompt_logprobs", [
+    (None, None),
+    (True, 5),
+])
+def test_stop_schedule_concurrent_batches(
+        enable_prefix_caching: Optional[bool], prompt_logprobs: Optional[int]):
+    scheduler = create_sliding_window_scheduler(
+        max_num_batched_tokens=1024,
+        max_num_seqs=2,
+        enable_prefix_caching=enable_prefix_caching,
+        sliding_window_size=2,
+    )
+    requests = create_requests(
+        num_requests=2,
+        num_tokens=8,
+        max_tokens=16,
+        stop_token_ids=[10],
+        prompt_logprobs=prompt_logprobs,
+    )
+
+    # schedule step 0
+    scheduler.add_request(requests[0])
+    scheduler_output0 = scheduler.schedule()
+    assert len(scheduler_output0.scheduled_new_reqs) == 1
+    assert scheduler_output0.num_scheduled_tokens[requests[0].request_id] == 8
+
+    # schedule step 1
+    scheduler.add_request(requests[1])
+    scheduler_output1 = scheduler.schedule()
+    assert len(scheduler_output1.scheduled_new_reqs) == 1
+    assert len(scheduler_output1.scheduled_cached_reqs) == 1
+    assert scheduler_output1.num_scheduled_tokens[requests[0].request_id] == 1
+    assert scheduler_output1.num_scheduled_tokens[requests[1].request_id] == 8
+
+    model_runner_output = ModelRunnerOutput(
+        req_ids=[requests[0].request_id],
+        req_id_to_index={requests[0].request_id: 0},
+        sampled_token_ids=[[0]],
+        spec_token_ids=None,
+        logprobs=None,
+        prompt_logprobs_dict={},
+    )
+    scheduler.update_from_output(scheduler_output0, model_runner_output)
+
+    # schedule step 2
+    scheduler_output2 = scheduler.schedule()
+    assert len(scheduler_output2.scheduled_new_reqs) == 0
+    assert len(scheduler_output2.scheduled_cached_reqs) == 2
+    assert scheduler_output2.num_scheduled_tokens[requests[0].request_id] == 1
+    assert scheduler_output2.num_scheduled_tokens[requests[1].request_id] == 1
+
+    model_runner_output = ModelRunnerOutput(
+        req_ids=[requests[0].request_id, requests[1].request_id],
+        req_id_to_index={
+            requests[0].request_id: 0,
+            requests[1].request_id: 1
+        },
+        sampled_token_ids=[[10], [0]],
+        spec_token_ids=None,
+        logprobs=None,
+        prompt_logprobs_dict={},
+    )
+    scheduler.update_from_output(scheduler_output1, model_runner_output)
+
+    # schedule step 3
+    scheduler_output3 = scheduler.schedule()
+    assert len(scheduler_output3.scheduled_cached_reqs) == 1
+    assert scheduler_output3.num_scheduled_tokens[requests[1].request_id] == 1
+    assert scheduler_output3.finished_req_ids == set([requests[0].request_id])
+
+    model_runner_output = ModelRunnerOutput(
+        req_ids=[requests[1].request_id],
+        req_id_to_index={requests[1].request_id: 0},
+        sampled_token_ids=[[10]],
+        spec_token_ids=None,
+        logprobs=None,
+        prompt_logprobs_dict={},
+    )
+    scheduler.update_from_output(scheduler_output2, model_runner_output)
+
+    # schedule step 4
+    scheduler_output4 = scheduler.schedule()
+    assert len(scheduler_output4.scheduled_cached_reqs) == 0
+    assert scheduler_output4.finished_req_ids == set([requests[1].request_id])
