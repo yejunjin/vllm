@@ -227,8 +227,7 @@ class EngineCore:
         scheduler_output = None
         # If there are unscheduled requests and the job queue
         # is not full, schedule a new batch. Note that this is not blocking.
-        if (self.scheduler.get_num_unscheduled_requests() > 0
-                and not self.batch_queue.full()):
+        if not self.batch_queue.full():
             scheduler_output = self.scheduler.schedule()
             if scheduler_output.total_num_scheduled_tokens > 0:
                 future = self.model_executor.execute_model(scheduler_output)

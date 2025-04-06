@@ -57,6 +57,10 @@ class AsyncMultiprocExecutor(MultiprocExecutor):
 
         future.set_result(responses[0])  # type: ignore
 
+    @property
+    def max_concurrent_batches(self) -> int:
+        return 2
+
     def shutdown(self):
         super().shutdown()
         self.executor.shutdown()
